@@ -107,6 +107,7 @@ Dockerfile · docker-compose.yml
 - [API REST](docs/API.md)
 - [Wireframes](docs/WIREFRAMES.md)
 - [Script SQL](docs/sql/schema.sql)
+- [Deploy na Vercel + Neon](docs/DEPLOY-VERCEL.md)
 
 ## 🔒 Segurança & operação
 
