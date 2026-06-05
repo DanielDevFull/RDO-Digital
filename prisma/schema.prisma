@@ -1,0 +1,299 @@
+// ============================================================================
+// RDO Digital - Modelagem do Banco de Dados (Prisma / PostgreSQL)
+// Sistema de Gerenciamento de Estoque de Produtos Químicos
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// ENUMS
+// ----------------------------------------------------------------------------
+
+enum UserRole {
+  ADMINISTRADOR
+  SUPERVISOR
+  OPERADOR
+  CONSULTA
+}
+
+enum MovementType {
+  ENTRADA
+  SAIDA
+  RETORNO
+}
+
+enum UnitOfMeasure {
+  UN // Unidade
+  L  // Litro
+  ML // Mililitro
+  KG // Quilograma
+  G  // Grama
+  MG // Miligrama
+  M3 // Metro cúbico
+  CX // Caixa
+  GL // Galão
+  FR // Frasco
+}
+
+enum ProductStatus {
+  ATIVO
+  INATIVO
+}
+
+enum AuthorizationStatus {
+  PENDENTE
+  APROVADO
+  REJEITADO
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  LOGIN_FALHA
+  CRIACAO
+  ALTERACAO
+  EXCLUSAO
+  MOVIMENTACAO
+  APROVACAO
+  REJEICAO
+  EXPORTACAO
+}
+
+// ----------------------------------------------------------------------------
+// USUÁRIOS / RBAC
+// ----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(OPERADOR)
+  rank         String? // Posto/Graduação militar
+  registration String?  @map("registration") // Identidade/Matrícula
+  active       Boolean  @default(true)
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Vínculo opcional a uma OM
+  omId String? @map("om_id")
+  om   Om?     @relation(fields: [omId], references: [id])
+
+  // Relações
+  movements             Movement[]               @relation("MovementResponsible")
+  requestedAuths        RestrictedAuthorization[] @relation("AuthRequester")
+  approvedAuths         RestrictedAuthorization[] @relation("AuthApprover")
+  auditLogs             AuditLog[]
+  createdProducts       Product[]                @relation("ProductCreatedBy")
+
+  @@index([role])
+  @@index([active])
+  @@map("users")
+}
+
+// ----------------------------------------------------------------------------
+// ORGANIZAÇÃO MILITAR (OM)
+// ----------------------------------------------------------------------------
+
+model Om {
+  id        String   @id @default(cuid())
+  code      String   @unique // Sigla da OM
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users     User[]
+  movements Movement[]
+
+  @@map("oms")
+}
+
+// ----------------------------------------------------------------------------
+// CATEGORIAS DE PRODUTO
+// ----------------------------------------------------------------------------
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  description String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  products  Product[]
+
+  @@map("categories")
+}
+
+// ----------------------------------------------------------------------------
+// ESTOQUE FÍSICO (cada um possui um QR Code fixo)
+// ----------------------------------------------------------------------------
+
+model Stock {
+  id          String   @id @default(cuid())
+  code        String   @unique // Código do estoque exibido/embutido no QR
+  name        String
+  location    String? // Localização física do estoque (galpão, sala...)
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  products  Product[]
+  movements Movement[]
+
+  @@map("stocks")
+}
+
+// ----------------------------------------------------------------------------
+// PRODUTOS
+// ----------------------------------------------------------------------------
+
+model Product {
+  id                  String        @id @default(cuid())
+  internalCode        String        @unique @map("internal_code")
+  name                String
+  description         String?
+  brand               String? // Marca
+  manufacturer        String? // Fabricante
+  unit                UnitOfMeasure @default(UN)
+  minStock            Float         @default(0) @map("min_stock")
+  maxStock            Float         @default(0) @map("max_stock")
+  currentQuantity     Float         @default(0) @map("current_quantity")
+  casNumber           String?       @map("cas_number") // Número CAS
+  isChemical          Boolean       @default(true) @map("is_chemical")
+  isRestricted        Boolean       @default(false) @map("is_restricted")
+  requiresAuth        Boolean       @default(false) @map("requires_auth") // Necessita autorização p/ retirada
+  fispqPdfUrl         String?       @map("fispq_pdf_url") // Ficha FISPQ (PDF)
+  expirationDate      DateTime?     @map("expiration_date") // Data de validade
+  batchNumber         String?       @map("batch_number") // Número do lote
+  physicalLocation    String?       @map("physical_location") // Localização física dentro do estoque
+  status              ProductStatus @default(ATIVO)
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  categoryId String?   @map("category_id")
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  stockId String? @map("stock_id")
+  stock   Stock?  @relation(fields: [stockId], references: [id])
+
+  createdById String? @map("created_by_id")
+  createdBy   User?   @relation("ProductCreatedBy", fields: [createdById], references: [id])
+
+  movements      Movement[]
+  authorizations RestrictedAuthorization[]
+
+  @@index([status])
+  @@index([isRestricted])
+  @@index([isChemical])
+  @@index([expirationDate])
+  @@map("products")
+}
+
+// ----------------------------------------------------------------------------
+// MOVIMENTAÇÕES (Entrada / Saída / Retorno)
+// ----------------------------------------------------------------------------
+
+model Movement {
+  id              String        @id @default(cuid())
+  type            MovementType
+  occurredAt      DateTime      @default(now()) @map("occurred_at") // Data e hora automáticas
+  unit            UnitOfMeasure
+  quantity        Float
+  applicationSite String?       @map("application_site") // Local de aplicação
+  notes           String? // Observações
+  batchNumber     String?       @map("batch_number") // Número do lote
+  expirationDate  DateTime?     @map("expiration_date") // Data de validade
+  previousBalance Float         @map("previous_balance") // Saldo anterior
+  updatedBalance  Float         @map("updated_balance") // Saldo atualizado
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  // Produto movimentado
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id])
+
+  // Estoque de origem (vinculado ao QR Code escaneado)
+  stockId String? @map("stock_id")
+  stock   Stock?  @relation(fields: [stockId], references: [id])
+
+  // OM (Organização Militar)
+  omId String? @map("om_id")
+  om   Om?     @relation(fields: [omId], references: [id])
+
+  // Responsável pela movimentação
+  responsibleId String @map("responsible_id")
+  responsible   User   @relation("MovementResponsible", fields: [responsibleId], references: [id])
+
+  // Autorização (quando produto restrito)
+  authorization RestrictedAuthorization?
+
+  @@index([type])
+  @@index([occurredAt])
+  @@index([productId])
+  @@index([omId])
+  @@map("movements")
+}
+
+// ----------------------------------------------------------------------------
+// AUTORIZAÇÃO DE PRODUTOS RESTRITOS
+// ----------------------------------------------------------------------------
+
+model RestrictedAuthorization {
+  id            String              @id @default(cuid())
+  status        AuthorizationStatus @default(PENDENTE)
+  reason        String // Motivo da retirada
+  digitalSignature String           @map("digital_signature") // Assinatura digital do solicitante
+  authorizedAt  DateTime?           @map("authorized_at") // Data e hora da autorização
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id])
+
+  // Solicitante
+  requesterId String @map("requester_id")
+  requester   User   @relation("AuthRequester", fields: [requesterId], references: [id])
+
+  // Responsável autorizador (Supervisor/Administrador)
+  approverId String? @map("approver_id")
+  approver   User?   @relation("AuthApprover", fields: [approverId], references: [id])
+
+  // Movimentação gerada após aprovação (1:1)
+  movementId String?   @unique @map("movement_id")
+  movement   Movement? @relation(fields: [movementId], references: [id])
+
+  @@index([status])
+  @@map("restricted_authorizations")
+}
+
+// ----------------------------------------------------------------------------
+// AUDITORIA / LOGS
+// ----------------------------------------------------------------------------
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  action      AuditAction
+  entity      String? // Entidade afetada (ex.: "Product")
+  entityId    String?     @map("entity_id")
+  description String?
+  metadata    Json? // Detalhes adicionais (diffs, payload...)
+  ipAddress   String?     @map("ip_address") // Registro de IP
+  userAgent   String?     @map("user_agent") // Dispositivo utilizado
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  userId String? @map("user_id")
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([action])
+  @@index([createdAt])
+  @@index([userId])
+  @@map("audit_logs")
+}

@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: rdo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rdo
+      POSTGRES_PASSWORD: rdo_secret
+      POSTGRES_DB: rdo_digital
+    ports:
+      - '5432:5432'
+    volumes:
+      - rdo_pgdata:/var/lib/postgresql/data
+      # Backup automático: dumps diários montados aqui (ver scripts/backup.sh)
+      - ./backups:/backups
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rdo -d rdo_digital']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: rdo-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://rdo:rdo_secret@db:5432/rdo_digital?schema=public
+      JWT_SECRET: ${JWT_SECRET:-troque-este-segredo-em-producao-com-mais-de-32-caracteres}
+      JWT_EXPIRES_IN: 8h
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NODE_ENV: production
+      RDO_SEED: ${RDO_SEED:-false}
+    ports:
+      - '3000:3000'
+    volumes:
+      - rdo_uploads:/app/public/uploads
+
+volumes:
+  rdo_pgdata:
+  rdo_uploads:
